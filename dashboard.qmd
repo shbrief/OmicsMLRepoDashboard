@@ -1,0 +1,217 @@
+---
+title: "cMD Dashboard"
+format: dashboard
+server: shiny
+---
+
+```{r}
+#| context: setup
+
+# Load libraries
+suppressPackageStartupMessages({
+    library(ggplot2)
+    library(tidyverse)
+    library(forcats)
+    library(OmicsMLRepoR)
+})
+
+# Load cMD metadata
+cMD_meta <- getMetadata("cMD")
+```
+
+To add a new feature plot to the dashboard, copy and paste each of the
+"Template" blocks and replace the feature-specific variables with the feature of
+interest. e.g. "feature" -> "disease", "features" -> "diseases",
+"featureplot_click" -> "diseaseplot_click". You will also need a vector of the
+different values in the feature in the order in which they should be displayed.
+Finally, you will need to update the filter() commands in each other
+renderPlot() function to filter by your new feature. Simply add a pipe operator,
+copy the existing filter() function call to a new line and replace the relevant
+variables. Note that the data being filtered retains its original column names
+even if the name of a feature has been altered for the dashboard, such as with
+"age_group" becoming simply "age". The original name will be used in the
+filter() call.
+
+You may also customize the renderPlot() call to display any plot type. The
+only portion of the code required to maintain the dynamic subsetting
+functionality is the creation of the "fdata" variable under the comment,
+"Get filtered data". "fdata" can then be transformed as needed for the
+individual plot. Certain plot types may also require adjustment of the
+plotOutput(click = ) attribute or different handling of that input to select the
+appropriate data for filtering.
+
+```{r}
+plotOutput("ageplot", click = "ageplot_click")
+verbatimTextOutput("printagef")
+```
+
+```{r}
+plotOutput("sexplot", click = "sexplot_click")
+verbatimTextOutput("printsexf")
+```
+
+```{r}
+# Template:
+# plotOutput("featureplot", click = "featureplot_click")
+# verbatimTextOutput("printfeaturef")
+```
+
+```{r}
+#| context: server
+
+#######################
+
+## Feature setup
+
+# Transform NA values to "NA"
+n_data <- cMD_meta %>%
+    mutate(across(everything(), as.character))
+n_data[is.na(n_data)] <- "NA"
+
+# Set up base levels for each feature
+ages <- c("Infant", "Children 2-11 Years Old",
+          "Adolescent", "Adult", "Elderly", "NA")
+sexes <- c("Female", "Male", "NA")
+
+# Template:
+# features <- c("level1", "level2", "level3", etc.)
+
+# Set up default filters for each feature
+col_filters <- reactiveValues(agef = ages,
+                              sexf = sexes)
+
+# Template (add to existing col_filters above):
+# (...,
+# featuref = features)
+
+#######################
+
+## Function to update filters
+update_filter <- function(current, input, original) {
+    if (identical(current, original)) {
+        new_filter <- input
+    } else if (identical(current, input)) {
+        new_filter <- original
+    } else if (input %in% current) {
+        new_filter <- current[-which(current == input)]
+    } else if (!input %in% current) {
+        new_filter <- c(current, input)
+        new_filter <- new_filter[order(match(new_filter, original))]
+    }
+    return(new_filter)
+}
+
+## Observing clicks
+observeEvent(input$ageplot_click, {
+    current_age <- col_filters$agef
+    input_age <- c(ages[round(input$ageplot_click$x, 0)])
+    col_filters$agef <- update_filter(current_age, input_age, ages)
+})
+
+observeEvent(input$sexplot_click, {
+    current_sex <- col_filters$sexf
+    input_sex <- c(sexes[round(input$sexplot_click$x, 0)])
+    col_filters$sexf <- update_filter(current_sex, input_sex, sexes)
+})
+
+# Template:
+# observeEvent(input$featureplot_click, {
+#     current_feature <- col_filters$feature_f
+#     input_feature <- c(features[round(input$featureplot_click$x, 0)])
+#     col_filters$featuref <- update_filter(current_feature, input_feature, features)
+# })
+
+#######################
+
+## Plot outputs
+output$ageplot <- renderPlot({
+    # Get filtered data
+    fdata <- n_data %>%
+        filter(sex %in% col_filters$sexf)
+    
+    # Bin data for bar chart
+    age_data <- as.data.frame(table(factor(fdata$age_group, levels = ages),
+                                    useNA = "no"))
+    age_data <- age_data[match(ages, age_data$Var1),]
+    
+    # Get bar colors based on click status
+    bar_colors <- rep("darkgray", length(ages))
+    bar_colors[which(ages %in% col_filters$agef)] <- "lightblue"
+    
+    # Plot data
+    p <- age_data %>%
+        mutate(Var1 = fct_relevel(Var1,
+                                  ages)) %>%
+        ggplot(aes(x = Var1, y = Freq, fill = Var1)) + 
+        geom_bar(stat = "identity") +
+        scale_fill_manual(values = bar_colors, guide = "none")
+    p
+})
+
+output$sexplot <- renderPlot({
+    # Get filtered data
+    fdata <- n_data %>%
+        filter(age_group %in% col_filters$agef)
+    
+    # Bin data for bar chart
+    sex_data <- as.data.frame(table(factor(fdata$sex, levels = sexes),
+                                    useNA = "no"))
+    sex_data <- sex_data[match(sexes, sex_data$Var1),]
+    
+    # Get bar colors based on click status
+    bar_colors <- rep("darkgray", length(sexes))
+    bar_colors[which(sexes %in% col_filters$sexf)] <- "lightblue"
+    
+    # Plot data
+    p <- sex_data %>%
+        mutate(Var1 = fct_relevel(Var1,
+                                  sexes)) %>%
+        ggplot(aes(x = Var1, y = Freq, fill = Var1)) + 
+        geom_bar(stat = "identity") +
+        scale_fill_manual(values = bar_colors, guide = "none")
+    p
+})
+
+# Template:
+# output$featureplot <- renderPlot({
+#     # Get filtered data
+#     fdata <- n_data %>%
+#         filter(age_group %in% col_filters$agef) %>%
+#         filter(sex %in% col_filters$sexf) %>% ... other features
+#
+#     # Bin data for bar chart
+#     feature_data <- as.data.frame(table(factor(fdata$feature, levels = features),
+#                                     useNA = "no"))
+#     feature_data <- feature_data[match(features, feature_data$Var1),]
+#     
+#     # Get bar colors based on click status
+#     bar_colors <- rep("darkgray", length(features))
+#     bar_colors[which(features %in% col_filters$featuref)] <- "lightblue"
+#     
+#     # Plot data
+#     p <- feature_data %>%
+#         mutate(Var1 = fct_relevel(Var1,
+#                                   features)) %>%
+#         ggplot(aes(x = Var1, y = Freq, fill = Var1)) + 
+#         geom_bar(stat = "identity") +
+#         scale_fill_manual(values = bar_colors, guide = "none")
+#     p
+# })
+
+#######################
+
+## Printing info for debugging
+output$printagef <- renderPrint({
+    col_filters$agef
+})
+
+output$printsexf <- renderPrint({
+    col_filters$sexf
+})
+
+# Template:
+# output$printfeaturef <- renderPrint({
+#     col_filters$featuref
+# })
+```
+
