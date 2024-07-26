@@ -12,6 +12,7 @@ suppressPackageStartupMessages({
     library(ggplot2)
     library(tidyverse)
     library(forcats)
+    library(MetCirc)
     library(OmicsMLRepoR)
 })
 
@@ -109,8 +110,40 @@ observeEvent(input$ageplot_click, {
 })
 
 observeEvent(input$sexplot_click, {
+    # Differences from template are specific to ggplot2 pie chart
+    # Recreate filtered data used in pie chart
+    fdata <- n_data %>%
+        filter(age_group %in% col_filters$agef)
+    
+    # Recreate bins used in pie chart
+    sex_data <- as.data.frame(table(factor(fdata$sex, levels = sexes),
+                                    useNA = "no"))
+    sex_data <- sex_data[match(sexes, sex_data$Var1),]
+    
+    # Recalculate proportions displayed in pie chart
+    sex_data <- sex_data %>%
+        arrange(desc(Var1)) %>%
+        mutate(prop = Freq / sum(sex_data$Freq) * 100) %>%
+        mutate(sumprop = cumsum(prop))
+    
+    # Get theta of click event
+    x <- input$sexplot_click$x - 1
+    y <- (input$sexplot_click$y / 100) - 0.5
+    polar <- cart2Polar(x, y)
+
+    # Convert theta to proportion
+    # Note: proportion starts at 12 o'clock and increases clockwise (0 -> 100),
+    #       theta starts at 3 o'clock and increases counterclockwise (0 -> 360)
+    if (polar$theta < 90) {
+        click_prop <- 25 - (polar$theta / 90 * 25)
+    } else {
+        click_prop <- (360 - polar$theta) / 270 * 75 + 25
+    }
+
+    # Update filter
+    input_sex <- as.character(sex_data$Var1[min(which(
+        sex_data$sumprop > click_prop))])
     current_sex <- col_filters$sexf
-    input_sex <- c(sexes[round(input$sexplot_click$x, 0)])
     col_filters$sexf <- update_filter(current_sex, input_sex, sexes)
 })
 
@@ -153,10 +186,16 @@ output$sexplot <- renderPlot({
     fdata <- n_data %>%
         filter(age_group %in% col_filters$agef)
     
-    # Bin data for bar chart
+    # Bin data for stacked bar (pie) chart
     sex_data <- as.data.frame(table(factor(fdata$sex, levels = sexes),
                                     useNA = "no"))
     sex_data <- sex_data[match(sexes, sex_data$Var1),]
+    
+    # Get label positions
+    sex_data <- sex_data %>%
+        arrange(desc(Var1)) %>%
+        mutate(prop = Freq / sum(sex_data$Freq) * 100) %>%
+        mutate(ypos = cumsum(prop)- 0.5 * prop )
     
     # Get bar colors based on click status
     bar_colors <- rep("darkgray", length(sexes))
@@ -166,9 +205,11 @@ output$sexplot <- renderPlot({
     p <- sex_data %>%
         mutate(Var1 = fct_relevel(Var1,
                                   sexes)) %>%
-        ggplot(aes(x = Var1, y = Freq, fill = Var1)) + 
-        geom_bar(stat = "identity") +
-        scale_fill_manual(values = bar_colors, guide = "none")
+        ggplot(aes(x = "", y = prop, fill = Var1)) + 
+        geom_bar(stat = "identity", width = 1, color = "white") +
+        scale_fill_manual(values = bar_colors, guide = "none") +
+        coord_polar("y", start = 0) +
+        geom_text(aes(y = ypos, label = Var1), color = "white", size = 6)
     p
 })
 
