@@ -16,7 +16,7 @@ library(enmSdmX)
 library(forcats)
 library(OmicsMLRepoR)
 library(maptools)
-
+library(bslib)
 
 ##### Load  & Tranform Data #####
 
@@ -38,36 +38,61 @@ n_data <- n_data %>% replace_na(as.list(rep("NA", ncol(n_data))))
 ages <- c("Infant", "Children 2-11 Years Old",
           "Adolescent", "Adult", "Elderly", "NA")
 sexes <- c("Female", "Male", "NA")
+countries <- as.character(country_cords$country)
 # Set up default filters for each feature
 col_filters <- reactiveValues(agef = ages,
-                              sexf = sexes)
+                              sexf = sexes,
+                              countriesf = countries)
 
 
 ##### Dashboard Layout and User Interface #####
 
-ui <- dashboardPage(
-  dashboardHeader(title = "Data by Country Map"),
-  dashboardSidebar(sidebarMenu(menuItem("World Map", tabName = "map"),
-                               menuItem("Age Plot", tabName = "ageplot"),
-                               menuItem("Sex Plot", tabName = "sexplot"))),
-  dashboardBody(
-    tabItems(
-      tabItem(tabName = "map",
-              leafletOutput("worldmap", height = 500),
-              absolutePanel(top = 490, right = '73%', height = 100, width =  100, fixed = FALSE)
-      ),
-      tabItem(tabName = "ageplot",
-              plotOutput("ageplot", click = "ageplot_click"),
-              verbatimTextOutput("printagef")
-      ),
-      tabItem(tabName = "sexplot",
-              plotOutput("sexplot", click = "sexplot_click"),
-              verbatimTextOutput("printsexf")
-      )
-    )
-  )
+ui <- fluidPage(theme = shinytheme("cerulean"),
+                useShinydashboard(),
+                fluidRow(
+                  layout_column_wrap(
+                    value_box(
+                      title = "Total Samples",
+                      value = nrow(cMD_meta),
+                      showcase = bsicons::bs_icon("bar-chart"),
+                      theme = "blue"
+                    ),
+                    value_box(
+                      title = "Total Countries",
+                      value = length(unique(cMD_meta$country)),
+                      showcase = bsicons::bs_icon("globe-europe-africa"),
+                      theme = "teal"
+                    ),
+                    value_box(
+                      title = "Total Disease/Cancer Types",
+                      value = length(unique(cMD_meta$disease)),
+                      showcase = bsicons::bs_icon("clipboard-pulse"),
+                      theme = "blue"
+                    )
+                  ),
+                  actionButton("do", "Reset Selection", icon("box-arrow-left"), 
+                               style="color: #000000; background-color: #337ab7; border-color: #2e6da4"),
+                  layout_column_wrap(
+                    card(height=440,
+                         card_title("World Map"),
+                         card_body(
+                           leafletOutput("worldmap"),
+                           absolutePanel(top = 10, right = 10)
+                         )
+                    ),
+                    card(height = 440,
+                         card_body(card_title("Age Distribution"),
+                                   plotOutput("ageplot", click = "ageplot_click"),
+                                   verbatimTextOutput("printagef")
+                         ),
+                         card_body(card_title("Sex Distribution"),
+                                   plotOutput("sexplot", click = "sexplot_click"),
+                                   verbatimTextOutput("printsexf")
+                         )
+                    )
+                  )
+                )
 )
-
 
 ##### Server inputs and outputs #####
 
@@ -75,14 +100,17 @@ server <- function(input, output){
   
   output$worldmap <- renderLeaflet({
     leaflet(options = leafletOptions(minZoom = 1)) %>%
-      addMiniMap()
+      addMiniMap(width = 100, height = 100, zoomLevelOffset = -5, toggleDisplay = T) %>%
+      fitBounds(-180, -180, 200, 180) %>%
+      setMaxBounds(-180, -180, 200, 180)
   })
   
   observe({
     # Get filtered data
     fdata <- n_data %>%
       filter(sex %in% col_filters$sexf) %>%
-      filter(age_group %in% col_filters$agef)
+      filter(age_group %in% col_filters$agef)%>%
+      filter(country %in% col_filters$countriesf)
     # Get curated_country data
     curated_country <- as.data.frame(fdata$country) %>% rename(curated_country = `fdata$country`)
     # Get country counts
@@ -96,8 +124,8 @@ server <- function(input, output){
     country_counts <- country_counts %>% select(country, ISO3, counts)
     
     # Creating the Map Data
-    pal <- colorBin("YlOrRd", domain = country_counts$counts, bins = 5)
-    pal2 <- colorBin("YlOrRd", domain = regional_counts$reg_counts, bins = 5)
+    pal <- colorBin("Reds", domain = country_counts$counts, bins = 8)
+    pal2 <- colorBin("Reds", domain = regional_counts$reg_counts, bins = 8)
     
     map_reg@data <- left_join(map_reg@data, regional_counts, 
                               by=join_by("REGION"))
@@ -116,6 +144,7 @@ server <- function(input, output){
                   color = "white",
                   dashArray = "3",
                   fillOpacity = 0.7,
+                  layerId = as.character(map$country),
                   highlight = highlightOptions(
                     weight = 3,
                     color = "white",
@@ -125,13 +154,14 @@ server <- function(input, output){
                   group = "countries",
                   label = ~paste(as.character(map$country),
                                  "Total Data Samples: ", as.character(map$counts))) %>%
-      groupOptions("countries", zoomLevels = 2:20) %>% 
+      groupOptions("countries", zoomLevels = 2:20) %>%
       addPolygons(data = map_reg, fillColor = ~pal2(map_reg$reg_counts),
                   weight = 1,
                   opacity = 1,
                   color = "white",
                   dashArray = "3",
                   fillOpacity = 0.7,
+                  layerId = as.character(map_reg$REGION),
                   highlight = highlightOptions(
                     weight = 3,
                     color = "white",
@@ -172,10 +202,42 @@ server <- function(input, output){
     col_filters$sexf <- update_filter(current_sex, input_sex, sexes)
   })
   
+  observeEvent(input$worldmap_shape_click, {
+    #capture the info of the clicked polygon
+    click <- input$worldmap_shape_click
+    #subset your table with the id of the clicked polygon
+    if(click$group =="countries"){
+      selected <- click$id
+    }else if(click$group =="regions"){
+      selected <- country_cords$country[which(country_cords$REGION == click$id)]
+    }
+    print(selected)
+    current_countries <- col_filters$countriesf
+    input_countries <- selected
+    col_filters$countriesf <- update_filter(current_countries, input_countries, countries)
+  })
+  
+  observeEvent(input$do, {
+    #current_countries <- col_filters$countriesf
+    #current_sex <- col_filters$sexf
+    #current_age <- col_filters$agef
+    
+    
+    col_filters$sexf <- sexes
+    col_filters$agef <- ages
+    col_filters$countriesf <- countries
+    
+    
+    #col_filters$sexf <- update_filter(current_sex, input_sex, sexes)
+    #col_filters$countriesf <- update_filter(current_countries, input_countries, countries)
+    #col_filters$agef <- update_filter(current_age, input_age, ages)
+  })
+
   output$ageplot <- renderPlot({
     # Get filtered data
     fdata <- n_data %>%
-      filter(sex %in% col_filters$sexf)
+      filter(sex %in% col_filters$sexf)%>%
+      filter(country %in% col_filters$countriesf)
     
     # Bin data for bar chart
     age_data <- as.data.frame(table(factor(fdata$age_group, levels = ages),
@@ -199,7 +261,8 @@ server <- function(input, output){
   output$sexplot <- renderPlot({
     # Get filtered data
     fdata <- n_data %>%
-      filter(age_group %in% col_filters$agef)
+      filter(age_group %in% col_filters$agef) %>%
+      filter(country %in% col_filters$countriesf)
     
     # Bin data for bar chart
     sex_data <- as.data.frame(table(factor(fdata$sex, levels = sexes),
